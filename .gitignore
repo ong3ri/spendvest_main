@@ -1,0 +1,17 @@
+# Python
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Compiled files
+*.pyc
+__pycache__/
+
+# Logs and databases
+*.log
+*.sqlite
+
+# Dependency directories
+node_modules/

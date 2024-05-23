@@ -10,48 +10,56 @@ import string
 import time
 from sqlalchemy.sql import func
 import re
+import json 
 
+from blu import Session
+from payments2 import send_user_stk
+
+import uuid
 
 current_timestamp = func.current_timestamp()
 
-spendvest_db = redis.Redis(host="localhost", port=6379, db=10)
-print(f"testing redis commection, {spendvest_db.ping()}")
-
-
-# mpesa space
-def authorize_mpesa_api_access():
-    pass 
-
-def reg_ingress_saf_url():
-    pass 
-
-def send_stk_push_a():
-    pass 
-
-
 # Account SID and Auth Token from www.twilio.com/console
 client = Client('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN')
-
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
 db = SQLAlchemy(app)
 
-class Session(db.Model):
+
+class MpesaCustomer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     uid = db.Column(db.String(36), nullable=False, unique=True)
-    waid = db.Column(db.String(15), nullable=False, unique=True)
-    name = db.Column(db.String(20), nullable=False)
-    current_menu_code = db.Column(db.String(10))
-    answer_payload = db.Column(db.JSON, nullable=False)
-    is_slot_filling = db.Column(db.Boolean, nullable=False, default=False)
-    current_slot_count = db.Column(db.Integer, nullable=False, default=0)
-    slot_quiz_count = db.Column(db.Integer, nullable=False, default=0)
-    current_slot_handler = db.Column(db.String(30))
+    mpesa_number = db.Column(db.String(15), nullable=False, unique=True)
     created_at = db.Column(db.Float, nullable=False)
     updated_at = db.Column(db.Float, nullable=False)
 
+    @staticmethod
+    def get_all_mpesa_customers():
+        return MpesaCustomer.query.all()
 
+    @staticmethod
+    def add_mpesa_customer(mpesa_number):
+        uid = str(uuid.uuid4())
+        current_time = time.time()
+        new_customer = MpesaCustomer(
+            uid=uid,
+            mpesa_number=mpesa_number,
+            created_at=current_time,
+            updated_at=current_time
+        )
+        db.session.add(new_customer)
+        db.session.commit()
+        return new_customer
+
+    @staticmethod
+    def test_add_10_users():
+        for _ in range(10):
+            mpesa_number = "2547" + ''.join([str(random.randint(0, 9)) for _ in range(8)])
+            MpesaCustomer.add_mpesa_customer(mpesa_number)
+        print("10 users added successfully") 
+    
+    
 class Menu(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     uid = db.Column(db.String(36), nullable=False, unique=True)
@@ -60,6 +68,11 @@ class Menu(db.Model):
     question_payload = db.Column(db.JSON, nullable=False)
     created_at = db.Column(db.Float, nullable=False)
     updated_at = db.Column(db.Float, nullable=False)
+    
+    @staticmethod
+    def load_question_pack(menu_code):
+        menu = Menu.query.filter_by(menu_code=menu_code).first()
+        return menu.question_payload
 
 class RequestTask(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -70,7 +83,6 @@ class RequestTask(db.Model):
     completed = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.Float, nullable=False)
     updated_at = db.Column(db.Float, nullable=False)
-
 
 
 
@@ -96,7 +108,7 @@ def load_menu_table():
                     "menu_code": "RU",
                     "menu_description": "Request register user task",
                     "question_payload": {
-                        0: "Register!\n\nWould you like us to register your number ?\n Yes or No",
+                        0: "Register!\n\nWould you like us to register this number for Mpesa service?\n Yes or No",
                         1: "Confirm registeration, by re-entering previous answer"
                     },
                     "created_at": time.time(),
@@ -108,7 +120,8 @@ def load_menu_table():
                     "menu_description": "Request send money task",
                     "question_payload": {
                         0: "Send money!\n\nEnter recipient Mpesa phone number",
-                        1: "Confirm number, by repeating it"
+                        1: "Confirm number, by repeating it",
+                        2: "Enter amount to send"
                     },
                     "created_at": time.time(),
                     "updated_at": time.time()
@@ -151,7 +164,7 @@ def load_menu_table():
                     "menu_code": "ST",
                     "menu_description": "Choose command to execute",
                     "question_payload": {
-                        0: "Enter command to proceed"
+                        0: "Select the following commands to proceed: \n\n0./reg\nfor register Whatsapp number for Mpesa services\n\n1./sm\nfor send money\n\n2./lp\nfor lipa pochi\n\n3./lbt\nfor buy goods and services till\n\n4./lbp\nfor paybill till\n\nTo select any enter /command or number"
                     },
                     "created_at": time.time(),
                     "updated_at": time.time()
@@ -180,261 +193,258 @@ def load_menu_table():
         print(f"Error occurred while loading menu data: {e}")
 
 
-
 slot_handlers = ["ru_handler", "sm_handler", "lp_handler", "lbt_handler", "lbp_handler", "start_handler"]
-
 
 # whatsapp ingress endpoint
 @app.route("/whatsapp", methods=["POST"])
-def whatsapp_webhook():
-    ingress_payload = request.values 
-    bot_instance = WhatsappBot(ingress_payload['WaId'], ingress_payload["ProfileName"])
-    bot_instance.ingest_message(ingress_payload['Body'].lower())
+def web_hook():
+    in_data = request.values 
+    user_waid = in_data.get('WaId')
+    user_name = in_data.get('ProfileName')
+    print(f"incoming payload is , {in_data}")
 
-    if bot_instance.is_first_interaction():
-        print(f"first contact initiated")
-        # Check if there's an existing session for the user
-        existing_session = Session.query.filter_by(waid=bot_instance.waid).first()
+    if Session.is_first_time_contact(user_waid):
+        print(f"First time contact")
 
-        # If an existing session is found, delete it
-        if existing_session:
-            db.session.delete(existing_session)
-            db.session.commit()
-            print("Existing session deleted.")
+        if Session.is_slot_filling(user_waid):
+            print(f"user is slot filling")
+            current_handler = Session.get_session(user_waid)[b'current_slot_handler'].decode('utf-8')
+            print(f"current handler is : {current_handler}")
+            client_input = in_data.get('Body').lower()
+            if current_handler == "st_handler":
+                if client_input in ['/reg', '/sm', '/lp', '/lbt', '/lbp', '/st', '/cancel']:
+                    if client_input == '/reg':
+                        Session.load_handler(user_waid,"ru_handler", "RU", 0, 2)
+                        # ask actual first question
+                        curr_slot_details = Session.fetch_slot_details(user_waid)
+                        menu_code = curr_slot_details['menu_code']
+                        quiz_pack = Menu.load_question_pack(menu_code)
+                        quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                        Session.step_slotting(user_waid, quiz_pack)
+                        return output_bot_message(quiz)
+                    
+                    elif client_input == '/sm':
+                        Session.load_handler(user_waid, "sm_handler", "SM",0, 3)
+                        curr_slot_details = Session.fetch_slot_details(user_waid)
+                        menu_code = curr_slot_details['menu_code']
+                        quiz_pack = Menu.load_question_pack(menu_code)
+                        quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                        Session.step_slotting(user_waid, quiz_pack)
+                        return output_bot_message(quiz)
+                    
+                    elif client_input == "/lp":
+                        message = "You have selected Lipa Pochi task"
+                        return output_bot_message(message)
+                        
+                    elif client_input == "/lbt":
+                        message = "You have selected buy goods and services task"
+                        return output_bot_message(message)
+                        
+                    elif client_input == "/lbp":
+                        message = "You have selected paybill task"
+                        return output_bot_message(message)
+                    
+                    elif client_input == "/st":
+                        print(f"processing /st command")
+                        Session.load_handler(user_waid,"st_handler", "ST", 0, 1)
+                        curr_slot_details = Session.fetch_slot_details(user_waid)
+                        menu_code = curr_slot_details['menu_code']
+                        quiz_pack = Menu.load_question_pack(menu_code)
+                        quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                        # Session.step_slotting(user_waid, quiz_pack)
+                        return output_bot_message(quiz)
 
-        # Create a new session
-        new_session = Session()
-        new_session.waid = bot_instance.waid
-        new_session.uid = generate_uid()
-        new_session.name = bot_instance.user_name
+                else:
+                    return output_bot_message("Enter comand /st to proceed")
+                 
+            elif current_handler == "ru_handler":
+                curr_slot_details = Session.fetch_slot_details(user_waid)          
+                menu_code = curr_slot_details['menu_code']
+                count_ = curr_slot_details['slot_count']
+                print(f"processing menu code {menu_code}, current_count {count_}")
+                print(f"type for count_ {type(count_)}")
+
                 
-        # slot filling init
-        new_session.is_slot_filling = True
-        new_session.current_menu_code = "LBT"
-        new_session.current_slot_handler = "lbt_handler"
+                if is_valid_yes_or_no(client_input):
+                    print(f"{client_input}, is valid input")
+                    Session.save_answer(user_waid, count_, client_input)
+                    if client_input == "yes":
 
-        new_session.current_slot_count = 0
-        new_session.slot_quiz_count = 1
-        new_session.answer_payload= {}
-        
-        new_session.created_at = time.time()
-        new_session.updated_at = time.time()
-        
-        all_session = Session.query.all()
-        print(f"current session count {all_session}")
+                        if Session.complete_reg_slotting(user_waid):
+                            message = f"Your registeration using +{user_waid}\n\nfor spendvest is complete,\n\n"
+                            Session.load_handler(user_waid, 'st_handler', 'ST',0, 1)
+                            existing_customer = MpesaCustomer.query.filter_by(mpesa_number=user_waid).first()
+                            
+                            if existing_customer:
+                                print(f"customer is existing")
+                                Session.clear_answer_slot(user_waid)
+                                message = f"This number is already registerd"
+                            else:
+                                MpesaCustomer.add_mpesa_customer(user_waid)
 
+                            return output_bot_message(message)
+                        
+                        else:
+                            quiz_pack = Menu.load_question_pack(menu_code)
+                            quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                    
+                            Session.step_slotting(user_waid, quiz_pack)
+                
+                            return output_bot_message(quiz)
+ 
+                    elif client_input == "no":
+                        print(f"Customer has cancelled")
+                        Session.clear_answer_slot(user_waid)
+                        message = f"You have cancelled the registeration process" 
+                        Session.load_handler(user_waid, "st_handler", "ST", 1, 1)
+                        return output_bot_message(message)
+                
+                else:
+                    print(f"{client_input}, is invalid")
+                    message = "Error\n\nThat input was invalid"
+                    return output_bot_message(message)
+                
+            elif current_handler == "sm_handler":
+                curr_slot_details = Session.fetch_slot_details(user_waid)          
+                menu_code = curr_slot_details['menu_code']
+                count_ = curr_slot_details['slot_count']
+                print(f"processing menu code {menu_code}, current_count {count_}")
+                print(f"type for count_ {type(count_)}")
+                count_ = int(count_)
 
-        try:
-            db.session.add(new_session)
-            db.session.commit()
-            print("New session created.")
-        except Exception as e: 
-            print(f"Error occurred while loading the session: {e}, entry count is {all_session}")
+                if count_ == 0 or count_ == 1:
+                    # process quiz1
+                    if is_valid_phone_number(client_input):
+                        print(f"{client_input}, is valid")
+                    
+                        Session.save_answer(user_waid, count_, client_input)
+                    
+                        if Session.complete_sm_slotting(user_waid):
+                            message = f"Your request for Send Money task has been submitted,\n\nPlease wait for Mpesa prompt on +{user_waid}\n\nThen enter your Mpesa PIN\n\nThank you 😊"
+                            Session.load_handler(user_waid, 'st_handler', 'ST', 0, 1)
+                            Session.clear_answer_slot(user_waid)
 
-        slot_details = bot_instance.fetch_slot_details()
-        bot_instance.process_handler(slot_details)
+                            print(f"user number is : {user_waid}")
+                            send_user_stk(user_waid, 50)
+                            return output_bot_message(message)
+                        else:
+                            quiz_pack = Menu.load_question_pack(menu_code)
+                            quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                    
+                            Session.step_slotting(user_waid, quiz_pack)
+                    
+                    
+                        return output_bot_message(quiz)
+                    else:
+                        print(f"{client_input}, is invalid")
+                        message = "Error\n\nThat input was invalid"
+                        return output_bot_message(message) 
+                     
+                elif count_ == 2:
+                    if is_valid_payment_amount(client_input):
+                        print(f"valid payment number : {client_input}")
+                        Session.save_answer(user_waid, count_, client_input)
+                        if Session.complete_sm_slotting(user_waid):
+                            message = f"Your request for Send Money task has been submitted,\n\nPlease wait for Mpesa prompt on +{user_waid}\n\nThen enter your Mpesa PIN\n\nThank you 😊"
+                            Session.load_handler(user_waid, 'st_handler', 'ST', 0, 1)
+                            Session.clear_answer_slot(user_waid)
 
-        bot_instance.step_slot()
-        return bot_instance.show_current_slot_quiz(slot_details)
+                            print(f"user number is : {user_waid}")
+                            send_user_stk(user_waid, 50)
+                            return output_bot_message(message)
+                        else:
+                            quiz_pack = Menu.load_question_pack(menu_code)
+                            quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+                    
+                            Session.step_slotting(user_waid, quiz_pack)
+                            return output_bot_message(quiz)
+                    else:
+                        print(f"{client_input}, is invalid")
+                        message = "Error\n\nThat input was invalid"
+                        return output_bot_message(message)  
+                 
+                    
+                
 
-    else:
-        # continuing user
-        if bot_instance.is_slot_filling():
-            print(f"user is slot filling, current input is : {bot_instance.current_input_message}")
-            slot_details = bot_instance.fetch_slot_details()
-
-            bot_instance.process_handler(slot_details)
-
-            bot_instance.step_slot()
-            return bot_instance.show_current_slot_quiz(slot_details)
-        else:
-            bot_instance.load_handler("start_handler")
-            return bot_instance.show_start_message()
-
-
-# whatsapp bot class
-class WhatsappBot:
-    """This object helps with non-destructive assembly of spendvest bot"""
-
-    def __init__(self, waid, user_name):
-        print(f"Bot loaded for WaId: {waid}")
-        self.waid = waid
-        self.current_input_message = ""
-        self.current_output_message = ""
-        self.user_name = user_name
-
-    def ingest_message(self, input_message):
-        self.current_input_message = input_message.lower()
-
-    def output_message(self):
-        resp = MessagingResponse()
-        resp.message(self.current_output_message)
-        return str(resp)
-
-    def is_first_interaction(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        return session is None
-
-
-
-    def show_start_message(self):
-        start_message = (
-            f"Welcome {self.user_name}\n\n"
-            "Select the following commands to proceed:\n\n"
-            "1. /sm\nfor send money\n\n"
-            "2. /lp\nfor lipa pochi\n\n"
-            "3. /lbt\nfor buy goods and services till\n\n"
-            "4. /lbp\nfor paybill till\n\n"
-            "To select any, enter /command"
-        )
-        self.current_output_message = start_message
-        return self.output_message()
-
-    def load_handler(self, handler_name):
-        session = Session.query.filter_by(waid=self.waid).first()
-        if session:
-            session.current_slot_handler = handler_name
-            handler_code_map = {
-                "ru_handler": "RU",
-                "sm_handler": "SM",
-                "lp_handler": "LP",
-                "lbt_handler": "LBT",
-                "lbp_handler": "LBP",
-                "start_handler": "ST"
-            }
-            session.current_menu_code = handler_code_map.get(handler_name, "")
-            db.session.commit()
-            print(f"Processing handler {handler_name}")
-        else:
-            print("No session found for the given WhatsApp ID.")
-
-    def null_handler(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        if session:
-            session.current_slot_handler = None
-            db.session.commit()
-        else:
-            print("No session found for the given WhatsApp ID.")
-
-
-
-    def is_slot_filling(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        return session.is_slot_filling if session else False
-    
-    def fetch_slot_details(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        if session:
-            menu = Menu.query.filter_by(menu_code=session.current_menu_code).first()
-            if menu:
-                return {
-                    "menu_code": session.current_menu_code,
-                    "slot_count": session.current_slot_count,
-                    "quiz_count": session.slot_quiz_count,
-                    "current_slot_handler": session.current_slot_handler,
-                    "quiz_pack": menu.question_payload
-                }
-        return "No session details"
-
-    def show_current_slot_quiz(self, slot_details):
-        count_ = slot_details['slot_count']
-        self.current_output_message = slot_details['quiz_pack'][str(count_)]
-        print(f"Updated current_output_message is: {self.current_output_message}")
-        return self.output_message()
-
-
-    def save_answer(self, payload):
-        pass 
-
-    def step_slot(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        if session:
-            if session.current_slot_count < session.slot_quiz_count:
-                session.current_slot_count += 1
-                db.session.commit()
-                print(f"Incremented slot count to {session.current_slot_count}")
-            else:
-                print("Current slot count is already at maximum.")
-        else:
-            print("No session found for the given WhatsApp ID.")
-
-
-    def complete_slot_filling(self):
-        session = Session.query.filter_by(waid=self.waid).first()
-        if session:
-            session.is_slot_filling = False
-            session.current_menu_code = "ST" 
-            session.current_slot_handler = "st_handler"
-
-            session.current_slot_count = 0
-            session.slot_quiz_count = 0
-            session.answer_payload = {}
-
-            db.session.commit()
-        else:
-            print("No session found for the given WhatsApp ID.")
-         
-    def is_valid_yes_or_no(reg_ans):
-        """Check if the input is 'yes' or 'no' after converting to lowercase."""
-        reg_ans = reg_ans.lower()
-        return reg_ans in ["yes", "no"] 
-
-    def is_valid_phone_number(phone_number):
-        """Validate phone numbers in the format +254XXXXXXXXX or 07XXXXXXXX."""
-        pattern = re.compile(r"^(?:\+254|0)?7\d{8}$")
-        return bool(pattern.match(phone_number))
-
-    def is_valid_till_number(till_number):
-        """Validate till numbers which are 6 to 7 digits."""
-        pattern = re.compile(r"^\d{6,7}$")
-        return bool(pattern.match(till_number))
-
-    def is_valid_paybill_number(paybill_number):
-        """Validate paybill numbers which are 5 to 6 digits."""
-        pattern = re.compile(r"^\d{5,6}$")
-        return bool(pattern.match(paybill_number))
-
-    def process_handler(self, slot_details):
-        handler = slot_details['current_slot_handler']
-        user_session = Session.query.filter_by(waid=self.waid).first()
-        ans_payload = user_session.answer_payload
-        print(f"fetched user session answer is , {ans_payload}")
-        ans = {f"{slot_details['slot_count']}": self.current_input_message}
-
-        if handler == "ru_handler":
-            if ans_payload == {}:
-                updated_ans = {}
-                updated_ans.update(ans)
-                print(f"in ru_handler, answer map is , {updated_ans}")
-                db.session.ans_payload = updated_ans
-                db.session.add(user_session)
-                try:
-                    db.session.commit()
-                except Exception as e:
-                    print(f"error in updating answer to table, {e}")
+                 
+            elif current_handler == "lp_handler":
                 pass
-            else:
-                existing_ans = user_session.ans_payload
-                existing_ans.update(ans)
-                print(f"in ru_handler 2, answer map is , {existing_ans}")
-                db.session.ans_payload = existing_ans
-                db.session.add(user_session)
-                try:
-                    db.session.commit()
-                except Exception as e:
-                    print(f"error in updating answer to table")
+               
+            elif current_handler == "lbt_handler":
+                pass
                 
-                
-             
-    def show_about_message(self):
-        about_information = (
-            "Welcome to Spendvest bot\n"
-            "This bot will help you to request payment tasks for Mpesa recipients"
-        )
-        self.current_output_message = about_information
-        return self.output_message()
+            elif current_handler == "lbp_handler":
+                pass           
+        else:
+            print(f"user is not slot filling")
+    else:
+        print(f"not first time contact, creating new session")
+        
+        new_user_session = Session(uid=generate_uid(), 
+                           waid=user_waid,
+                           name=in_data.get('ProfileName'), 
+                           current_menu_code='ST', 
+                           answer_payload='[]', 
+                           is_slot_filling=0, 
+                           current_slot_count=0, 
+                           slot_quiz_count=len(Menu.load_question_pack('ST')), 
+                           current_slot_handler='st_handler')
+        new_user_session.save()
+        # Session.set_slot_filling_on(user_waid)
+        Session.set_slot_filling_on(user_waid)
+        quiz_pack = Menu.load_question_pack('ST')
+        print(f"current quiz pack, {quiz_pack}")
+        quiz = Session.return_current_slot_quiz(user_waid, quiz_pack)
+        print(f"created session with slot_filling on is , {Session.get_session(user_waid)}")
+        return output_bot_message(quiz)
+    
+     
+def output_bot_message(message):
+    resp = MessagingResponse()
+    resp.message(message)
+    return str(resp)
 
 
+def is_valid_yes_or_no(reg_ans):
+    """Check if the input is 'yes' or 'no' after converting to lowercase."""
+    reg_ans = reg_ans.lower()
+    return reg_ans in ["yes", "no"] 
+
+def is_valid_phone_number(phone_ans):
+    phone_pattern = re.compile(r'^\d{10,15}$')
+    return bool(phone_pattern.match(phone_ans))
+
+def is_valid_paybill(paybill_ans):
+    paybill_pattern = re.compile(r'^\d{5,10}$')
+    return bool(paybill_pattern.match(paybill_ans))
+
+def is_valid_till(till_ans):
+    till_pattern = re.compile(r'^\d{5,10}$')
+    return bool(till_pattern.match(till_ans))
+
+def is_valid_payment_amount(payment):
+    # Define the regex pattern for a valid payment amount
+    pattern = r'^[\$\€\£]?\s*-?\d{1,3}(?:[,.\s]?\d{3})*(?:[.,]\d{1,2})?$'
+
+    # Check if the input matches the pattern
+    if re.match(pattern, payment):
+        return True
+    else:
+        return False
+
+# mpesa
+@app.route("/mpesa_callback", methods=['POST'])
+def process_callback():
+    print(f"recieved callback data is, {request.get_json()}")
+
+    return 'ok'
+
+
+@app.route("/mpesa_callback_timeout", methods=['POST'])
+def process_callback_timeout():
+    print(f"recieved callback data is, {request.get_json()}")
+
+    return 'ok'
 
 
 # Get all sessions

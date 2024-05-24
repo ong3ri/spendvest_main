@@ -6,13 +6,26 @@ redis_client = redis.Redis(host="localhost", port=6379, db=10)
 print(f"testing redis connection, {redis_client.ping()}")
 
 class Session():
-    def __init__(self, uid, waid, name, current_menu_code=None, answer_payload=None, is_slot_filling=False, current_slot_count=0, slot_quiz_count=0, current_slot_handler=None):
+    def __init__(
+            self,
+            uid,
+            waid,
+            name,
+            user_flow,
+            current_menu_code=None,
+            answer_payload=None,
+            is_slot_filling=False,
+            current_slot_count=0,
+            slot_quiz_count=0,
+            current_slot_handler=None
+    ):
         self.uid = uid
         self.waid = waid
         self.name = name
         self.current_menu_code = current_menu_code
         self.answer_payload = answer_payload if answer_payload is not None else []
         self.slot_filling = is_slot_filling
+        self.user_flow = user_flow
         self.current_slot_count = current_slot_count
         self.slot_quiz_count = slot_quiz_count
         self.current_slot_handler = current_slot_handler
@@ -27,6 +40,7 @@ class Session():
             'current_menu_code': self.current_menu_code,
             'answer_payload': self.answer_payload,  # Serialize the list
             'slot_filling': self.slot_filling,  # Serialize the boolean
+            'user_flow': self.current_userflow,
             'current_slot_count': self.current_slot_count,
             'slot_quiz_count': self.slot_quiz_count,
             'current_slot_handler': self.current_slot_handler,
@@ -125,7 +139,8 @@ class Session():
     def save_answer(waid, curr_count_, ans):
         current_ans_payload = Session.load_ans_payload(waid)
         curr_count = int(curr_count_) - 1
-        new_entry = {curr_count: ans}
+        # new_entry = {curr_count: ans}
+        new_entry = ans
         new_payload = ''
 
         if current_ans_payload == '[]':
@@ -134,8 +149,10 @@ class Session():
         else:
             print(f"Not empty answer payload : {current_ans_payload}")
             existing_payload = json.loads(current_ans_payload)
-            if len(existing_payload) == 2:
-                pass 
+            if len(existing_payload) >= 2:
+                existing_payload.append(new_entry)
+                new_payload = json.dumps(existing_payload)
+                 
             else:
             
                 existing_payload.append(new_entry)
@@ -183,7 +200,7 @@ class Session():
 
     @staticmethod
     def complete_sm_slotting(waid):
-        print(f"calling complete registeration function")
+        print(f"calling complete send_money function")
         current_ans_payload = Session.load_ans_payload(waid)
         json_loaded = json.loads(current_ans_payload)
         print(f"current answer payload is : {json_loaded}, and type is {type(json_loaded)}")
@@ -201,4 +218,14 @@ class Session():
         
         if payload_length == 1:
             print(f"current answer is : {json_loaded[0]}")
-            return False 
+            return False
+        
+        if payload_length == 3:
+            print(f"payload_length : {payload_length}")
+            if json_loaded[0] == json_loaded[1]:
+                print(f"answer is the same")
+                Session.clear_answer_slot(waid)
+                return True
+            else:
+                print(f"answers not the same")
+                return False

@@ -1,1 +1,1 @@
-delete from mpesa_customer;
+SELECT * from mpesa_customer;

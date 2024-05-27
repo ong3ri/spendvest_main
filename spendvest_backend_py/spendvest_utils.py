@@ -121,3 +121,6 @@ def generate_mpesa_send_save_pattern(transaction_type, amount):
 
 def dispatch_mpesa_send_pattern(dispatch_uid, dispatch_payload):
     pass 
+
+def dispatch_payment_centrally():
+    pass 

@@ -4,6 +4,7 @@ import base64
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 import json
+from models import RequestTask, Settlement, Menu, MpesaCustomer, AccountSummary
 
 import random, string 
 
@@ -30,19 +31,19 @@ def get_auth_token():
     print(f"response for auth token is, {token}")
     return token
 
-auth_token = get_auth_token()
+
 
 def register_callback_url():
     url = "https://sandbox.sasapay.app/api/v1/payments/register-ipn-url/"  # Replace with the actual URL
     
     headers = {
         "key": "Authorization",
-        "Authorization": f"Bearer {auth_token} "
+        "Authorization": f"Bearer {get_auth_token()} "
     }
 
     body = {
         "MerchantCode": "600980",  # Replace with the actual merchant code
-        "ConfirmationUrl": "https://cb40-102-217-172-2.ngrok-free.app/mpesa_callbacke"
+        "ConfirmationUrl": "https://cb40-102-217-172-2.ngrok-free.app/mpesa_callback"
     }
 
     response = requests.post(url, headers=headers, json=body)
@@ -56,13 +57,13 @@ def register_callback_url():
         print("Response:", response.text)
      
 
-def send_user_stk(user_number, amount):
+def send_user_stk(user_number, amount, menu_code):
     print(f"should be calling stk push")
     url = "https://sandbox.sasapay.app/api/v1/payments/request-payment/"
 
     headers = {
         "Key": "Authorization",
-        "Authorization": f"Bearer {auth_token}"
+        "Authorization": f"Bearer {get_auth_token()}"
     }
 
     body = {
@@ -74,13 +75,27 @@ def send_user_stk(user_number, amount):
         "Currency": "KES",
         "Amount": amount,
         "TransactionFee": 0,
-        "CallBackURL": "https://cb40-102-217-172-2.ngrok-free.app/mpesa_callback"
+        "CallBackURL": "https://d7d7-102-217-172-2.ngrok-free.app/mpesa_callback"
     }
 
     response = requests.post(url, headers=headers, json=body)
     if response.status_code == 200:
         print("Request successful")
         print("Response:", response.json())
+        # call request task
+        service_description = Menu.get_menu(menu_code)
+        if service_description != False:
+            description = service_description['menu_description']
+            RequestTask.add_request_task(user_number, menu_code, description, body)
+            Settlement.add_settlement(user_number,menu_code, amount, False)
+            summary = AccountSummary.get_acc_summary(user_number)
+
+            AccountSummary.update_acc_summary(user_number, {
+                'total_deposit':int(summary[b'total_deposit'].decode('utf-8')) + 1,
+                'total_settlement':int(summary[b'total_settlement'].decode('utf-8')) + 1,
+                'amount_deposited':float(summary[b'amount_deposited'].decode('utf-8')) + amount
+            })
+            
     else:
         print("Request failed")
         print("Status code:", response.status_code)
@@ -91,7 +106,7 @@ def send_payment(receiving_number, send_amount):
     url = "https://sandbox.sasapay.app/api/v1/payments/b2c/"  # Replace with the actual URL
 
     headers = {
-        "Authorization": f"Bearer {auth_token}",
+        "Authorization": f"Bearer {get_auth_token()}",
         "Key": "Authorization"
     }
 
@@ -102,7 +117,7 @@ def send_payment(receiving_number, send_amount):
     "Amount": str(send_amount),
     "ReceiverNumber": str(receiving_number),
     "Channel": "63902",
-    "CallBackURL": "https://7f97-102-217-172-2.ngrok-free.app/mpesa_callback",
+    "CallBackURL": "https://d7d7-102-217-172-2.ngrok-free.app/mpesa_callback",
     "Reason": "Test B2C"
     }
 
@@ -113,61 +128,18 @@ def send_payment(receiving_number, send_amount):
     if response.status_code == 200:
         print("Request was successful.")
         print("Response:", response.json())
+        # update the settlement completed
+
     else:
         print("Request failed with status code:", response.status_code)
         print("Response:", response.text)
 
 
-def send_payment2(receiving_number, send_amount):
-    url = "https://sandbox.sasapay.app/api/v1/remittances/remittance-payments/"
-
-    headers = {
-        "Authorization": f"Bearer {auth_token}",
-        "Key": "Authorization",
-        # "Content-type":'application/json'k
-    }
-
-    body = {
-        "MerchantCode": 600980,
-        "MerchantTransactionReference": "TESTVX1239",
-        "DestinationChannelCode": "63902",
-        "DestinationChannelName": "M-PESA",
-        "Currency": "KES",
-        "Amount": str(send_amount),
-        "ReceiverPhoneNumber": f"{receiving_number}",
-        "ReceiverAccountNumber": f"{receiving_number}",
-        "ReceiverAccountName": "Jane Doe",
-        "ForeignCurrency": "USD,1",
-        "SenderPhoneNumber": "254700855496",
-        "SenderName": "John Doe",
-        "SenderDOB": "2020-08-08",  # Optional
-        "SenderCountryISO": "GB",
-        "SenderNationality": "British",
-        "SenderIDType": "National ID",
-        "SenderIDNumber": "123***78",
-        "SenderServiceProviderName": "SasaPay Remit",
-        "RemittancePurpose": "Test",
-        "CallbackURL": "https://cb40-102-217-172-2.ngrok-free.app/mpesa_callback",
-        "Remarks": "Test"
-    }
-
-    response = requests.post(url, headers=headers, json=body)
-    
-    if response.status_code == 200:
-        # Successfully received a response
-        response_data = response.json()
-        return response_data
-    else:
-        # Handle errors
-        print(f"Failed to send payment. Status code: {response.status_code}")
-        print(f"Response: {response.text}")
-        return None
-
 
 def get_acc_balance():
     url = f"https://sandbox.sasapay.app/api/v1/payments/check-balance/?MerchantCode={merchant_code}"  # Replace with the actual balance endpoint URL
     headers = {
-        "Authorization": f"Bearer {auth_token}",
+        "Authorization": f"Bearer {get_auth_token()}",
         "key": "Authorization"
     }
     

@@ -1,190 +1,249 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, JSON, Boolean, MetaData
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+import redis
 import uuid
 import time
 import random
+import json
 
-# Create an engine
-engine = create_engine('sqlite:///site.db')  # Replace with your actual database URL
+# Create a Redis client
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=10)
 
-# Create a configured "Session" class
-Session = sessionmaker(bind=engine)
-
-# Create a Session
-session = Session()
-
-# Create a base class for your models
-Base = declarative_base()
-
-class MpesaCustomer(Base):
-    __tablename__ = 'mpesa_customers'
-    id = Column(Integer, primary_key=True)
-    uid = Column(String(36), nullable=False, unique=True)
-    mpesa_number = Column(String(15), nullable=False, unique=True)
-    created_at = Column(Float, nullable=False)
-    updated_at = Column(Float, nullable=False)
-
+class MpesaCustomer:
     @staticmethod
     def get_all_mpesa_customers():
-        return session.query(MpesaCustomer).all()
+        customer_keys = redis_client.keys('mpesa_customer:*')
+        customers = []
+        for key in customer_keys:
+            customer = redis_client.hgetall(key)
+            customer['mpesa_number'] = customer[b'mpesa_number'].decode('utf-8')
+            customers.append(customer)
+        return customers
+
+    @staticmethod
+    def get_single_user(mpesa_number):
+        key = f"mpesa_customer:{mpesa_number}"
+        return redis_client.hgetall(key)
+        
 
     @staticmethod
     def add_mpesa_customer(mpesa_number):
         uid = str(uuid.uuid4())
         current_time = time.time()
-        new_customer = MpesaCustomer(
-            uid=uid,
-            mpesa_number=mpesa_number,
-            created_at=current_time,
-            updated_at=current_time
-        )
-        session.add(new_customer)
-        session.commit()
-        return new_customer
+        key = f"mpesa_customer:{mpesa_number}"
+        if redis_client.exists(key):
+            return None  # Customer already exists
+        customer = {
+            'uid': uid,
+            'mpesa_number': mpesa_number,
+            'created_at': current_time,
+            'updated_at': current_time
+        }
+        redis_client.hmset(key, customer)
+        return customer
 
     @staticmethod
     def test_add_10_users():
         for _ in range(10):
             mpesa_number = "2547" + ''.join([str(random.randint(0, 9)) for _ in range(8)])
             MpesaCustomer.add_mpesa_customer(mpesa_number)
-        print("10 users added successfully") 
+        print("10 users added successfully")
 
-class Menu(Base):
-    __tablename__ = 'menus'
-    id = Column(Integer, primary_key=True)
-    uid = Column(String(36), nullable=False, unique=True)
-    menu_code = Column(String(10), nullable=False)
-    menu_description = Column(String(100))
-    question_payload = Column(JSON, nullable=False)
-    created_at = Column(Float, nullable=False)
-    updated_at = Column(Float, nullable=False)
-    
+class Menu:
     @staticmethod
     def load_question_pack(menu_code):
-        return session.query(Menu).filter_by(menu_code=menu_code).first().question_payload
+        key = f"menu:{menu_code}"
+        if redis_client.exists(key):
+            menu = redis_client.hgetall(key)
+            menu['question_payload'] = json.loads(menu[b'question_payload'])
+            return menu['question_payload']
+        return None
 
-class RequestTask(Base):
-    __tablename__ = 'request_tasks'
-    id = Column(Integer, primary_key=True)
-    uid = Column(String(36), nullable=False, unique=True)
-    client_id = Column(String(36), nullable=False, unique=True)
-    service_description = Column(String(100))
-    service_payload = Column(JSON, nullable=False)
-    completed = Column(Boolean, nullable=False, default=False)
-    created_at = Column(Float, nullable=False)
-    updated_at = Column(Float, nullable=False)
-
-# Function to create tables
-def create_tables():
-    """
-    Create the MpesaCustomer, Menu, and RequestTask tables in the database.
-    """
-    Base.metadata.create_all(engine)
-    print("Tables created successfully.")
-
-# Helper function to generate unique IDs
-def generate_uid():
-    return str(uuid.uuid4())
-
-# Function to load menu table with initial data
-def load_menu_table():
-    try:
-        if not session.query(Menu).all():
-            menu_data = [
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "RU",
-                    "menu_description": "Request register user task",
-                    "question_payload": {
-                        0: "Register!\n\nWould you like us to register this number for Mpesa service?\n Yes or No",
-                        1: "Confirm registration, by re-entering previous answer"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                },
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "SM",
-                    "menu_description": "Request send money task",
-                    "question_payload": {
-                        0: "Send money!\n\nEnter recipient Mpesa phone number",
-                        1: "Confirm number, by repeating it",
-                        2: "Enter amount to send"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                },
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "LP",
-                    "menu_description": "Request lipa na pochi la biashara task",
-                    "question_payload": {
-                        0: "Lipa pochi!\n\nEnter recipient Mpesa phone number",
-                        1: "Confirm number, by repeating it",
-                        2: "Enter amount to send"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                },
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "LBT",
-                    "menu_description": "Request lipa na Buy Goods and Services task",
-                    "question_payload": {
-                        0: "Buy Goods and Services!\n\nEnter recipient Mpesa buy goods and services number",
-                        1: "Confirm number, by repeating it",
-                        2: "Enter amount to send"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                },
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "LBP",
-                    "menu_description": "Request lipa na paybill task",
-                    "question_payload": {
-                        0: "Paybill!\n\nEnter recipient Mpesa paybill number",
-                        1: "Confirm number, by repeating it",
-                        2: "Enter amount to send"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                },
-                {
-                    "uid": generate_uid(),
-                    "menu_code": "ST",
-                    "menu_description": "Choose command to execute",
-                    "question_payload": {
-                        0: "Select the following commands to proceed: \n\n0./reg\nfor register Whatsapp number for Mpesa services\n\n1./sm\nfor send money\n\n2./lp\nfor lipa pochi\n\n3./lbt\nfor buy goods and services till\n\n4./lbp\nfor paybill till\n\nTo select any enter /command or number"
-                    },
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                }
-            ]
-
-            print(f"Loading menu table with data: {menu_data}")
-
-            for data in menu_data:
-                menu = Menu(
-                    uid=data['uid'],
-                    menu_code=data['menu_code'],
-                    menu_description=data['menu_description'],
-                    question_payload=data['question_payload'],
-                    created_at=data['created_at'],
-                    updated_at=data['updated_at']
-                )
-                session.add(menu)
-
-            session.commit()
-            print("Menu data loaded successfully")
-
+    @staticmethod
+    def add_menu(menu_code, menu_description, question_payload):
+        uid = str(uuid.uuid4())
+        current_time = time.time()
+        key = f"menu:{menu_code}"
+        menu = {
+            'uid': uid,
+            'menu_code': menu_code,
+            'menu_description': menu_description,
+            'question_payload': json.dumps(question_payload),
+            'created_at': current_time,
+            'updated_at': current_time
+        }
+        redis_client.hmset(key, menu)
+    
+    @staticmethod
+    def get_menu(menu_code):
+        key = f"menu:{menu_code}"
+        menu = redis_client.hgetall(key)
+        if menu :
+            return_menu = {
+                'uid' : menu[b'uid'],
+                'menu_code':menu[b'menu_code'],
+                'menu_description':menu[b'menu_description'],
+                'question_payload':menu[b'question_payload'],
+                'created_at':menu[b'created_at'],
+                'updated_at':menu[b'updated_at']
+            }
+            return return_menu
+            
         else:
-            print(f"Menu table is not empty, maintaining existing data: {session.query(Menu).all()}")
-    except Exception as e:
-        print(f"Error occurred while loading menu data: {e}")
+            return False  
+
+class AccountSummary:
+    @staticmethod
+    def add_summary(waid):
+        key = f"account_summary:{waid}"
+        summary = {
+            'total_deposit':0,
+            'total_settlement':0,
+            'amount_deposited':0.00,
+            'amount_settled':0.00,
+            'total_amount_saved':0.00,
+            'last_amount_saved':0.00
+        }
+        redis_client.hmset(key, summary)
+         
+
+    @staticmethod
+    def get_acc_summary(waid):
+        key = f"account_summary:{waid}"
+        return redis_client.hgetall(key) 
+    
+    @staticmethod
+    def update_acc_summary(waid,summary_payload):
+        key=f"account_summary:{waid}"
+        return redis_client.hmset(key,summary_payload)
+
+class RequestTask:
+    @staticmethod
+    def add_request_task(client_waid, menu_code,service_description, service_payload):
+        uid = str(uuid.uuid4())
+        current_time = time.time()
+        ref = service_payload['AccountReference']
+        key = f"request_task:{ref}"
+        task = {
+            'uid': uid,
+            'customer_waid': client_waid,
+            'service_menu':menu_code,
+            'service_description': service_description,
+            'service_payload': json.dumps(service_payload),
+            'completed': int(False),
+            'created_at': current_time,
+            'updated_at': current_time
+        }
+        redis_client.hmset(key, task)
+        return task
+    
+    @staticmethod
+    def get_task(ref) :
+        key = f"request_task:{ref}"
+        task = redis_client.hgetall(key)
+        if task != None :
+            return {
+                'uid':task[b'uid'],
+                'customer_waid':task[b'customer_waid'].decode('utf-b'),
+                'service_menu':task[b'service_menu'].decode('utf-b'),
+                'service_description':task[b'service_description'].decode('utf-8'),
+                'service_payload':task[b'service_payload'].decode('utf-8'),
+                'completed':task[b'completed'].decode('utf-8'),
+                'created_at':task[b'created_at'].decode('utf-8'),
+                'updated_at':task[b'updated_at'].decode('utf-8')
+            }
+            
+
+
+
+class Settlement:
+    @staticmethod
+    def add_settlement(client_waid, menu_code, amount, complete_bool):
+        uid = str(uuid.uuid4())
+        current_time = time.time()
+        key = f"settlement:{uid}"
+        settlement = {
+            'end_settlement_number' : client_waid,
+            'menu_code':menu_code,
+            'amount':amount,
+            'completed':int(complete_bool),
+            'created_at':current_time,
+            'updated_at':current_time
+        }
+
+        return redis_client.hmset(key, settlement)
+        
+
+    @staticmethod
+    def get_customer_settlement():
+        pass
+
+    @staticmethod
+    def complete_customer_settlement(ref):
+        return redis_client.hset(f"settlement:{ref}", 'completed', 1)
+    
+def load_menu_table():
+    menu_data = [
+        {
+            "menu_code": "RU",
+            "menu_description": "Request register user task",
+            "question_payload": {
+                0: "Register!\n\nWould you like us to register this number for Mpesa service?\n Yes or No",
+                1: "Confirm registration, by re-entering previous answer"
+            }
+        },
+        {
+            "menu_code": "SM",
+            "menu_description": "Request send money task",
+            "question_payload": {
+                0: "Send money!\n\nEnter recipient Mpesa phone number",
+                1: "Confirm number, by repeating it",
+                2: "Enter amount to send"
+            }
+        },
+        {
+            "menu_code": "LP",
+            "menu_description": "Request lipa na pochi la biashara task",
+            "question_payload": {
+                0: "Lipa pochi!\n\nEnter recipient Mpesa phone number",
+                1: "Confirm number, by repeating it",
+                2: "Enter amount to send"
+            }
+        },
+        {
+            "menu_code": "LBT",
+            "menu_description": "Request lipa na Buy Goods and Services task",
+            "question_payload": {
+                0: "Buy Goods and Services!\n\nEnter recipient Mpesa buy goods and services number",
+                1: "Confirm number, by repeating it",
+                2: "Enter amount to send"
+            }
+        },
+        {
+            "menu_code": "LBP",
+            "menu_description": "Request lipa na paybill task",
+            "question_payload": {
+                0: "Paybill!\n\nEnter recipient Mpesa paybill number",
+                1: "Confirm number, by repeating it",
+                2: "Enter amount to send"
+            }
+        },
+        {
+            "menu_code": "ST",
+            "menu_description": "Choose command to execute",
+            "question_payload": {
+                0: "Select the following commands to proceed: \n\n0./reg\nfor register Whatsapp number for Mpesa services\n\n1./sm\nfor send money\n\n2./lp\nfor lipa pochi\n\n3./lbt\nfor buy goods and services till\n\n4./lbp\nfor paybill till\n\n5./refresh\nfor refreshing accout transactions\n\nTo select any enter /command or number"
+            }
+        }
+    ]
+
+    for data in menu_data:
+        Menu.add_menu(
+            menu_code=data['menu_code'],
+            menu_description=data['menu_description'],
+            question_payload=data['question_payload']
+        )
+    print("Menu data loaded successfully")
 
 # Example usage:
 if __name__ == '__main__':
-    create_tables()  # Create tables
+    MpesaCustomer.test_add_10_users()  # Add test users
     load_menu_table()  # Load initial menu data

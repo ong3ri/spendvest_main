@@ -40,7 +40,7 @@ class Session():
             'current_menu_code': self.current_menu_code,
             'answer_payload': self.answer_payload,  # Serialize the list
             'slot_filling': self.slot_filling,  # Serialize the boolean
-            'user_flow': self.current_userflow,
+            'user_flow': self.user_flow,
             'current_slot_count': self.current_slot_count,
             'slot_quiz_count': self.slot_quiz_count,
             'current_slot_handler': self.current_slot_handler,
@@ -207,14 +207,6 @@ class Session():
         payload_length = len(json_loaded)
         print(f"payload length is  {payload_length}")
          
-        if payload_length == 2:
-            if json_loaded[0] == json_loaded[1]:
-                print(f"answer is the same")
-                Session.clear_answer_slot(waid)
-                return True
-            else:
-                print(f"answers not the same")
-                return False 
         
         if payload_length == 1:
             print(f"current answer is : {json_loaded[0]}")

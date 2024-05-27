@@ -199,7 +199,8 @@ def web_hook():
                             Session.clear_answer_slot(user_waid)
 
                             print(f"user number is : {user_waid}")
-                            send_user_stk(user_waid, int(client_input),'SM')
+                            customer_message = send_user_stk(user_waid, int(client_input),'SM')
+                            message = message + "\n\n" + customer_message
                             return output_bot_message(message)
                         else:
                             quiz_pack = Menu.load_question_pack(menu_code)

@@ -81,7 +81,8 @@ def send_user_stk(user_number, amount, menu_code):
     response = requests.post(url, headers=headers, json=body)
     if response.status_code == 200:
         print("Request successful")
-        print("Response:", response.json())
+        customer_message = response.json()['CustomerMessage']
+        print("Response for customer message:", customer_message)
         # call request task
         service_description = Menu.get_menu(menu_code)
         if service_description != False:
@@ -95,7 +96,9 @@ def send_user_stk(user_number, amount, menu_code):
                 'total_settlement':int(summary[b'total_settlement'].decode('utf-8')) + 1,
                 'amount_deposited':float(summary[b'amount_deposited'].decode('utf-8')) + amount
             })
-            
+
+            return customer_message
+
     else:
         print("Request failed")
         print("Status code:", response.status_code)

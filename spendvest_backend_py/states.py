@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 import re
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -14,10 +14,10 @@ def output_bot_message(message):
 
 @dataclass
 class QuestionState():
-    next_state: 'QuestionState'
     valid_input: re.Pattern
     menu_message: str
     handler: Callable
+    next_state: Union['QuestionState', None]
 
     def handle_input(
             self,
@@ -32,7 +32,7 @@ class QuestionState():
         raise Exception("Invalid input.")
 
 
-    def get_menu_message(message: str):
+    def get_menu_message(self, message: str):
         output_bot_message(message)
     
 @dataclass
@@ -41,23 +41,23 @@ class CircularQuestionList():
     current_step: QuestionState
     trigger_input: str
 
-    def append(self, trigger_input, valid_input, menu_message, handler):
+    def append(self, valid_input, menu_message, handler):
         new_question = QuestionState(
-            trigger_input=trigger_input,
             valid_input=valid_input,
             menu_message=menu_message,
-            handler=handler
+            handler=handler,
+            next_state=None
         )
-        if not self.head:
+        if self.head == None:
             self.head = new_question
-            self.head.next = self.head
+            self.head.next_state = self.head
             self.current_step = self.head
         else:
             current = self.head
-            while current.next != self.head:
-                current = current.next
-            current.next = new_question
-            new_question.next = self.head
+            while current.next_state != self.head and current.next_state != None:
+                current = current.next_state
+            current.next_state = new_question
+            new_question.next_state = self.head
 
     def set_current_step(self, step: QuestionState):
         self.current_step = step
@@ -69,19 +69,19 @@ class CircularQuestionList():
             input_character=input_character
         )
 
-        if success:
+        if success and self.current_step.next_state != None:
             self.set_current_step(self.current_step.next_state)
 
         return success
     
 # Send Money
-send_money = CircularQuestionList()
+# send_money = CircularQuestionList()
 
 # Lipa Pochi
-lipa_pochi = CircularQuestionList()
+# lipa_pochi = CircularQuestionList()
 
 # Buy Goods Till
-buy_goods_till = CircularQuestionList()
+# buy_goods_till = CircularQuestionList()
 
 # Paybill
-paybill_till = CircularQuestionList()
+# paybill_till = CircularQuestionList()
